@@ -1,1 +1,5 @@
 BluetoothBatteryOverlay-Setup-*.exe
+BluetoothBatteryOverlay-Portable-*.zip
+BluetoothBatteryOverlay.iss
+Start Bluetooth Battery Overlay.cmd
+settings.json

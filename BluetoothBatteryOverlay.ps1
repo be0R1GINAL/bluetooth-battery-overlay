@@ -1,9 +1,9 @@
-﻿param([switch]$SelfTest)
+﻿param([switch]$SelfTest, [switch]$Portable)
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 
-$settingsPath = Join-Path $env:APPDATA 'BluetoothBatteryOverlay\settings.json'
+$settingsPath = if ($Portable) { Join-Path $PSScriptRoot 'settings.json' } else { Join-Path $env:APPDATA 'BluetoothBatteryOverlay\settings.json' }
 $defaultLanguage = if ([Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'ru') { 'ru' } else { 'en' }
 $settings = @{ Left = $null; Top = $null; Width = 215; Opacity = 0.85; Color = '#FFFFFF'; Language = $defaultLanguage; HiddenDevices = @(); KnownDevices = @() }
 if (Test-Path $settingsPath) {
@@ -102,10 +102,32 @@ function Get-DeviceIcon([string]$description) {
         default { 'bluetooth' }
     }
 }
+function Convert-BatteryPercent($value) {
+    $percent = 0
+    if ([int]::TryParse([string]$value, [ref]$percent) -and $percent -ge 0 -and $percent -le 100) { return $percent }
+    $null
+}
+function Resolve-BatteryPercent([object[]]$samples) {
+    if ($samples.Count -eq 0) { return $null }
+    $ordered = @($samples | Sort-Object Value)
+    $low = $ordered[[int][Math]::Floor(($ordered.Count - 1) / 2)].Value
+    $high = $ordered[[int][Math]::Floor($ordered.Count / 2)].Value
+    $middle = ($low + $high) / 2
+    ($samples | Sort-Object @{ Expression = { [Math]::Abs($_.Value - $middle) } }, Priority | Select-Object -First 1).Value
+}
+function Add-ConnectedDevice([hashtable]$devices, [string]$containerId, [string]$name, [string]$icon, $shellBattery) {
+    if (-not $devices.ContainsKey($containerId)) {
+        $devices[$containerId] = @{ Name = $name; Icon = $icon; ShellBattery = $shellBattery }
+    } elseif ($null -eq $devices[$containerId].ShellBattery -and $null -ne $shellBattery) {
+        $devices[$containerId].ShellBattery = $shellBattery
+    }
+}
 function Get-BluetoothDevices {
     $ids = @{}
     $bleAddresses = @{}
     $handsFreeNodes = @{}
+    $pnpBatteries = @{}
+    $batteryKey = '{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2'
     Get-PnpDevice -Class Bluetooth -ErrorAction Stop |
         Where-Object { $_.InstanceId -match '^(BTHENUM|BTHLE)\\DEV_' } |
         ForEach-Object {
@@ -118,6 +140,11 @@ function Get-BluetoothDevices {
                 $ids[$containerId] = $true
                 if ($_.InstanceId -match '^BTHLE\\DEV_([0-9A-Fa-f]{12})') {
                     $bleAddresses[$containerId] = [Convert]::ToUInt64($Matches[1], 16)
+                }
+                $property = Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName $batteryKey -ErrorAction SilentlyContinue
+                if ($property) {
+                    $percent = Convert-BatteryPercent $property.Data
+                    if ($null -ne $percent -and -not $pnpBatteries.ContainsKey($containerId)) { $pnpBatteries[$containerId] = $percent }
                 }
             }
         }
@@ -136,33 +163,50 @@ function Get-BluetoothDevices {
     $shell = New-Object -ComObject Shell.Application
     $folder = $shell.Namespace('shell:::{A8A91A66-3A7D-4424-8D24-04E180695C7A}')
     if (-not $folder) { throw 'Windows Devices and Printers folder is unavailable.' }
+    $connected = @{}
     foreach ($item in $folder.Items()) {
         $containerId = [string]$item.ExtendedProperty('System.Devices.ContainerId')
         if (-not $ids.ContainsKey($containerId) -or
             $item.ExtendedProperty('System.Devices.Connected') -ne $true) { continue }
-        $battery = $item.ExtendedProperty('System.Devices.BatteryLife')
-        $batteryPercent = 0
-        $hasBattery = [int]::TryParse([string]$battery, [ref]$batteryPercent) -and $batteryPercent -ge 0 -and $batteryPercent -le 100
-        if (-not $hasBattery -and $handsFreeNodes.ContainsKey($containerId)) {
-            $level = Get-PnpDeviceProperty -InstanceId $handsFreeNodes[$containerId] -KeyName '{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2' -ErrorAction SilentlyContinue
-            if ($level) { $battery = $level.Data }
-            $hasBattery = [int]::TryParse([string]$battery, [ref]$batteryPercent) -and $batteryPercent -ge 0 -and $batteryPercent -le 100
-        }
-        if (-not $hasBattery -and $bleAddresses.ContainsKey($containerId)) {
-            $battery = Get-BleBattery $bleAddresses[$containerId]
-            $hasBattery = [int]::TryParse([string]$battery, [ref]$batteryPercent) -and $batteryPercent -ge 0 -and $batteryPercent -le 100
-        }
         $icon = Get-DeviceIcon ([string]$item.Name)
         if ($icon -eq 'bluetooth') { $icon = Get-DeviceIcon ((@($item.ExtendedProperty('System.Devices.Category')) -join ' ')) }
+        Add-ConnectedDevice $connected $containerId ([string]$item.Name) $icon (Convert-BatteryPercent $item.ExtendedProperty('System.Devices.BatteryLife'))
+    }
+    foreach ($containerId in $connected.Keys) {
+        $device = $connected[$containerId]
+        $samples = @()
+        if ($null -ne $device.ShellBattery) { $samples += [pscustomobject]@{ Source = 'Windows'; Value = $device.ShellBattery; Priority = 3 } }
+        if ($pnpBatteries.ContainsKey($containerId)) { $samples += [pscustomobject]@{ Source = 'PnP'; Value = $pnpBatteries[$containerId]; Priority = 2 } }
+        if ($handsFreeNodes.ContainsKey($containerId)) {
+            $property = Get-PnpDeviceProperty -InstanceId $handsFreeNodes[$containerId] -KeyName $batteryKey -ErrorAction SilentlyContinue
+            if ($property) {
+                $percent = Convert-BatteryPercent $property.Data
+                if ($null -ne $percent) { $samples += [pscustomobject]@{ Source = 'HFP'; Value = $percent; Priority = 1 } }
+            }
+        }
+        if ($bleAddresses.ContainsKey($containerId)) {
+            $percent = Convert-BatteryPercent (Get-BleBattery $bleAddresses[$containerId])
+            if ($null -ne $percent) { $samples += [pscustomobject]@{ Source = 'BLE'; Value = $percent; Priority = 0 } }
+        }
         [pscustomobject]@{
-            Name = [string]$item.Name
-            Battery = if ($hasBattery) { $batteryPercent } else { $null }
-            Icon = $icon
+            Name = $device.Name
+            Battery = Resolve-BatteryPercent $samples
+            Icon = $device.Icon
+            Sources = (@($samples | ForEach-Object { "$($_.Source):$($_.Value)" }) -join ', ')
         }
     }
 }
 
 if ($SelfTest) {
+    $mock = @{}
+    Add-ConnectedDevice $mock 'device-1' 'Headphones' 'headphones' 80
+    Add-ConnectedDevice $mock 'device-1' 'Headphones audio' 'headphones' 75
+    Add-ConnectedDevice $mock 'device-2' 'Headphones' 'headphones' $null
+    if ($mock.Count -ne 2 -or $mock['device-1'].ShellBattery -ne 80 -or
+        (Resolve-BatteryPercent @([pscustomobject]@{ Value = 65; Priority = 2 })) -ne 65 -or
+        (Resolve-BatteryPercent @([pscustomobject]@{ Value = 80; Priority = 3 }, [pscustomobject]@{ Value = 75; Priority = 1 })) -ne 75 -or
+        (Resolve-BatteryPercent @([pscustomobject]@{ Value = 80; Priority = 3 }, [pscustomobject]@{ Value = 75; Priority = 1 }, [pscustomobject]@{ Value = 75; Priority = 0 })) -ne 75 -or
+        (Convert-BatteryPercent 101) -ne $null) { throw 'Battery reconciliation failed.' }
     if ((Get-DeviceIcon 'Беспроводная мышь') -ne 'mouse' -or
         (Get-DeviceIcon 'Nothing Headphone (1)') -ne 'headphones' -or
         (Get-DeviceIcon 'Wireless Controller') -ne 'controller' -or
@@ -173,7 +217,8 @@ if ($SelfTest) {
     return
 }
 $created = $false
-$mutex = [System.Threading.Mutex]::new($true, 'Local\BluetoothBatteryOverlay', [ref]$created)
+$mutexName = if ($Portable) { 'Local\BluetoothBatteryOverlayPortable' } else { 'Local\BluetoothBatteryOverlay' }
+$mutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$created)
 if (-not $created) { $mutex.Dispose(); return }
 
 [xml]$xaml = @'
@@ -260,7 +305,7 @@ function Render-Devices {
 }
 
 function Refresh-Devices {
-    try { $script:devices = @(Get-BluetoothDevices | Sort-Object Name -Unique); $script:readError = $false }
+    try { $script:devices = @(Get-BluetoothDevices | Sort-Object Name); $script:readError = $false }
     catch { $script:devices = @(); $script:readError = $true }
     $newDevice = $false
     foreach ($device in $script:devices) {
