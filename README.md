@@ -4,11 +4,10 @@
 
 ## Запуск без установки
 
-1. Скачайте `BluetoothBatteryOverlay-Portable-1.1.0.zip` из [Releases](https://github.com/be0R1GINAL/bluetooth-battery-overlay/releases).
-2. Распакуйте архив в папку, доступную для записи.
-3. Запустите `Start Bluetooth Battery Overlay Portable.cmd`.
+1. Скачайте `BluetoothBatteryOverlay-Portable-1.1.1.exe` из [Releases](https://github.com/be0R1GINAL/bluetooth-battery-overlay/releases).
+2. Сохраните EXE в папку, доступную для записи, и запустите его двойным щелчком.
 
-Установка и права администратора не нужны. Настройки хранятся в `settings.json` рядом с программой. Подробнее: [PORTABLE.md](PORTABLE.md).
+Установка и права администратора не нужны. Настройки хранятся в `settings.json` рядом с программой. Если запуск завершится ошибкой, появится сообщение, а подробности сохранятся в `BluetoothBatteryOverlay-error.log`. Подробнее: [PORTABLE.md](PORTABLE.md).
 
 ## Управление
 
@@ -23,7 +22,7 @@
 
 ## Исходники и сборка
 
-Приложение написано на Windows PowerShell 5.1 и WPF. Портативный запуск передаёт скрипту параметр `-Portable`.
+Приложение написано на Windows PowerShell 5.1 и WPF. `Build-Portable.ps1` собирает один EXE со встроенным скриптом; требуется штатный Windows PowerShell 5.1 и .NET Framework 4.x.
 
 Для проверки обнаружения устройств:
 
@@ -35,6 +34,6 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\BluetoothBatteryO
 
 Bluetooth Battery Overlay shows connected Bluetooth devices with their names, icons, and battery percentages when Windows exposes the data. Drag the overlay to move it; right-click it for transparency, size, color, device visibility, and **RU / EN** language settings. The tray icon stays in the notification area. Double-click it to show or hide the overlay.
 
-Download `BluetoothBatteryOverlay-Portable-1.1.0.zip` from [Releases](https://github.com/be0R1GINAL/bluetooth-battery-overlay/releases), extract it into a writable folder, and run `Start Bluetooth Battery Overlay Portable.cmd`. No installation or administrator rights are required. Settings stay in `settings.json` beside the app. Device battery reporting depends on what Windows receives from each device.
+Download `BluetoothBatteryOverlay-Portable-1.1.1.exe` from [Releases](https://github.com/be0R1GINAL/bluetooth-battery-overlay/releases), save it in a writable folder, and double-click it. No installation or administrator rights are required. Settings stay in `settings.json` beside the app. Startup errors appear in a dialog and in `BluetoothBatteryOverlay-error.log`. Device battery reporting depends on what Windows receives from each device.
 
 The app checks Windows device battery, Bluetooth PnP, Hands-Free Profile, and BLE Battery Service where available. It reconciles valid readings and shows one entry per Windows device container.

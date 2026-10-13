@@ -3,7 +3,8 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
 
-$settingsPath = if ($Portable) { Join-Path $PSScriptRoot 'settings.json' } else { Join-Path $env:APPDATA 'BluetoothBatteryOverlay\settings.json' }
+$portableRoot = if ($env:BBO_PORTABLE_ROOT) { $env:BBO_PORTABLE_ROOT } else { $PSScriptRoot }
+$settingsPath = if ($Portable) { Join-Path $portableRoot 'settings.json' } else { Join-Path $env:APPDATA 'BluetoothBatteryOverlay\settings.json' }
 $defaultLanguage = if ([Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'ru') { 'ru' } else { 'en' }
 $settings = @{ Left = $null; Top = $null; Width = 215; Opacity = 0.85; Color = '#FFFFFF'; Language = $defaultLanguage; HiddenDevices = @(); KnownDevices = @() }
 if (Test-Path $settingsPath) {
@@ -219,7 +220,12 @@ if ($SelfTest) {
 $created = $false
 $mutexName = if ($Portable) { 'Local\BluetoothBatteryOverlayPortable' } else { 'Local\BluetoothBatteryOverlay' }
 $mutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$created)
-if (-not $created) { $mutex.Dispose(); return }
+if (-not $created) {
+    $mutex.Dispose()
+    $message = if ($settings.Language -eq 'ru') { 'Оверлей уже запущен. Проверьте скрытые значки панели задач.' } else { 'The overlay is already running. Check the hidden tray icons.' }
+    [void][System.Windows.Forms.MessageBox]::Show($message, 'Bluetooth Battery Overlay')
+    return
+}
 
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
